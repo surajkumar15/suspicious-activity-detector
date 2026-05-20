@@ -1,0 +1,26 @@
+{
+  "zones": [
+    {
+      "id": "zone-01",
+      "name": "Restricted Area - Main Entrance",
+      "polygon": [
+        [100, 100],
+        [400, 100],
+        [400, 350],
+        [100, 350]
+      ],
+      "color": "#FF0000"
+    },
+    {
+      "id": "zone-02",
+      "name": "Restricted Area - Server Room",
+      "polygon": [
+        [450, 200],
+        [620, 200],
+        [620, 400],
+        [450, 400]
+      ],
+      "color": "#FF6600"
+    }
+  ]
+}
