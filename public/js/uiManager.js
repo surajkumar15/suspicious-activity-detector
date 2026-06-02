@@ -174,7 +174,7 @@ class UIManager {
     el.innerHTML = `
       <div class="alert-type">${alert.alertType.replace(/_/g, ' ')}</div>
       <div class="alert-time">${time} — ${alert.severity}</div>
-      <div class="alert-status" id="alert-${alert.alertId}">Sending to API...</div>
+      <div class="alert-status" id="alert-${alert.alertId}">Sending alert...</div>
     `;
 
     container.insertBefore(el, container.firstChild);
@@ -184,11 +184,11 @@ class UIManager {
     }
   }
 
-  updateAlertStatus(alertId, delivered, message) {
+  updateAlertStatus(alertId, delivered) {
     const el = document.getElementById(`alert-${alertId}`);
     if (el) {
       el.className = delivered ? 'alert-status delivered' : 'alert-status failed';
-      el.textContent = message || (delivered ? 'API notified — alarm raised' : 'API call failed');
+      el.textContent = delivered ? 'Alarm raised' : 'Delivery failed';
     }
   }
 

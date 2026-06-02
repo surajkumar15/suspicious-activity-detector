@@ -93,6 +93,12 @@ const config = {
     outputDir: process.env.FEED_OUTPUT_DIR
       ? require('path').resolve(process.env.FEED_OUTPUT_DIR)
       : require('path').join(__dirname, '..', 'captures'),
+    // Video capture duration (seconds) when alert is triggered
+    videoDurationSec: parseInt(process.env.VIDEO_DURATION_SEC, 10) || 10,
+    // Video output format: webm (browser native) or mp4 (requires ffmpeg)
+    videoFormat: (process.env.VIDEO_FORMAT || 'webm').toLowerCase(),
+    // Path to ffmpeg executable for MP4 conversion (optional)
+    ffmpegPath: process.env.FFMPEG_PATH || 'ffmpeg',
   },
 };
 

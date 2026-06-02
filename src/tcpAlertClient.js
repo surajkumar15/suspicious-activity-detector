@@ -71,7 +71,7 @@ class TcpAlertClient {
   }
 
   /**
-   * Send the alert command strings to the listener.
+   * Send the alert command string to the listener.
    * Called whenever an alert is triggered.
    */
   sendAlert() {
@@ -83,7 +83,6 @@ class TcpAlertClient {
 
     try {
       this.socket.write('send-alert\n');
-      this.socket.write('send-text\n');
     } catch (err) {
       logger.error('TCP alert client failed to send', { error: err.message });
     }

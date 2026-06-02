@@ -3,10 +3,12 @@ const logger = require('../logger');
 class BehaviorAnalyzer {
   constructor(options = {}) {
     this.crowdThreshold = options.crowdThreshold || 5;
-    this.consecutiveFramesRequired = 5;
+    this.consecutiveFramesRequired = options.consecutiveFramesRequired || 1;
+    this.fightDistanceThreshold = options.fightDistanceThreshold || 240;
+    this.handToHeadThreshold = options.handToHeadThreshold || 140;
     this.fightingFrameCount = 0;
     this.crowdFrameCount = 0;
-    this.minPersonConfidence = 0.7;
+    this.minPersonConfidence = 0.6;
   }
 
   analyze(detections, poses) {
@@ -78,25 +80,24 @@ class BehaviorAnalyzer {
 
         if (!poseA.keypoints || !poseB.keypoints) continue;
 
-        const wristA = this._getKeypoint(poseA, 'left_wrist') || this._getKeypoint(poseA, 'right_wrist');
-        const wristB = this._getKeypoint(poseB, 'left_wrist') || this._getKeypoint(poseB, 'right_wrist');
-        const noseA = this._getKeypoint(poseA, 'nose');
-        const noseB = this._getKeypoint(poseB, 'nose');
+        const headA = this._getHeadPoint(poseA);
+        const headB = this._getHeadPoint(poseB);
+        const handA = this._getContactPoint(poseA);
+        const handB = this._getContactPoint(poseB);
 
-        if (!wristA || !wristB || !noseA || !noseB) continue;
+        const headAValid = !!headA;
+        const headBValid = !!headB;
+        const contactAValid = !!handA;
+        const contactBValid = !!handB;
 
-        const personDistance = Math.sqrt(
-          Math.pow(noseA.x - noseB.x, 2) + Math.pow(noseA.y - noseB.y, 2)
-        );
+        if (!headAValid || !headBValid || (!contactAValid && !contactBValid)) continue;
 
-        const wristToOtherHead1 = Math.sqrt(
-          Math.pow(wristA.x - noseB.x, 2) + Math.pow(wristA.y - noseB.y, 2)
-        );
-        const wristToOtherHead2 = Math.sqrt(
-          Math.pow(wristB.x - noseA.x, 2) + Math.pow(wristB.y - noseA.y, 2)
-        );
+        const personDistance = headAValid && headBValid ? this._distance(headA, headB) : Number.POSITIVE_INFINITY;
+        const handToHeadA = contactBValid && headAValid ? this._distance(handB, headA) : Number.POSITIVE_INFINITY;
+        const handToHeadB = contactAValid && headBValid ? this._distance(handA, headB) : Number.POSITIVE_INFINITY;
 
-        if (personDistance < 120 && (wristToOtherHead1 < 60 || wristToOtherHead2 < 60)) {
+        if (personDistance < this.fightDistanceThreshold
+          && (handToHeadA < this.handToHeadThreshold || handToHeadB < this.handToHeadThreshold)) {
           return true;
         }
       }
@@ -105,9 +106,35 @@ class BehaviorAnalyzer {
     return false;
   }
 
+  _getContactPoint(pose) {
+    return this._getKeypoint(pose, 'left_wrist')
+      || this._getKeypoint(pose, 'right_wrist')
+      || this._getKeypoint(pose, 'left_elbow')
+      || this._getKeypoint(pose, 'right_elbow')
+      || this._getKeypoint(pose, 'left_shoulder')
+      || this._getKeypoint(pose, 'right_shoulder')
+      || this._getKeypoint(pose, 'left_hip')
+      || this._getKeypoint(pose, 'right_hip');
+  }
+
+  _getHeadPoint(pose) {
+    return this._getKeypoint(pose, 'nose')
+      || this._getKeypoint(pose, 'left_eye')
+      || this._getKeypoint(pose, 'right_eye')
+      || this._getKeypoint(pose, 'left_ear')
+      || this._getKeypoint(pose, 'right_ear')
+      || this._getKeypoint(pose, 'left_shoulder')
+      || this._getKeypoint(pose, 'right_shoulder');
+  }
+
+  _distance(a, b) {
+    return Math.sqrt(Math.pow(a.x - b.x, 2) + Math.pow(a.y - b.y, 2));
+  }
+
   _getKeypoint(pose, name) {
-    const kp = pose.keypoints.find(k => k.name === name);
-    return (kp && kp.score > 0.5) ? kp : null;
+    if (!pose.keypoints) return null;
+    const kp = pose.keypoints.find(k => k.name === name || k.part === name);
+    return (kp && kp.score > 0.3) ? kp : null;
   }
 }
 

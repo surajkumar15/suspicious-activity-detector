@@ -20,6 +20,9 @@ class FeedWriter {
     this.enabled = config.feed.enabled;
     this.outputDir = config.feed.outputDir;
     this.mode = config.feed.mode;
+    this.videoDurationSec = config.feed.videoDurationSec;
+    this.videoFormat = config.feed.videoFormat;
+    this.ffmpegPath = config.feed.ffmpegPath;
     this.imageEnabled = this.mode === 'image' || this.mode === 'both';
     this.videoEnabled = this.mode === 'video' || this.mode === 'both';
 
@@ -65,7 +68,7 @@ class FeedWriter {
       return this.streams.get(info.sessionId).videoPath;
     }
 
-    const ext = this._extForMime(info.mimeType);
+    const ext = this.videoFormat === 'mp4' ? 'mp4' : this._extForMime(info.mimeType);
     const baseName = this._buildBaseName({
       timestamp: new Date().toISOString(),
       alertType: info.alertType,
@@ -75,7 +78,7 @@ class FeedWriter {
 
     try {
       const ws = fs.createWriteStream(videoPath);
-      this.streams.set(info.sessionId, {
+      const session = {
         ws,
         videoPath,
         baseName,
@@ -85,10 +88,23 @@ class FeedWriter {
         alertType: info.alertType,
         severity: info.severity,
         mimeType: info.mimeType || 'video/webm',
-      });
+        autoCloseTimer: null,
+      };
+      this.streams.set(info.sessionId, session);
+
+      // Auto-close stream after configured duration
+      session.autoCloseTimer = setTimeout(() => {
+        logger.info('Feed writer: auto-closing video stream after timeout', {
+          sessionId: info.sessionId,
+          durationSec: this.videoDurationSec,
+        });
+        this.endStream(info.sessionId);
+      }, this.videoDurationSec * 1000);
+
       logger.info('Feed writer: live video stream started', {
         sessionId: info.sessionId,
         file: path.basename(videoPath),
+        durationSec: this.videoDurationSec,
       });
       return videoPath;
     } catch (err) {
@@ -129,29 +145,24 @@ class FeedWriter {
     if (!session) return null;
     this.streams.delete(sessionId);
 
+    // Cancel auto-close timer if still pending
+    if (session.autoCloseTimer) {
+      clearTimeout(session.autoCloseTimer);
+    }
+
     await new Promise((resolve) => session.ws.end(resolve));
 
-    const meta = {
-      sessionId,
-      startedAt: session.startedAt,
-      endedAt: new Date().toISOString(),
-      alertType: session.alertType,
-      severity: session.severity,
-      mimeType: session.mimeType,
-      bytes: session.bytes,
-      chunks: session.chunks,
-      video: path.basename(session.videoPath),
-    };
-
     try {
-      await this._atomicWrite(
-        path.join(this.outputDir, `${session.baseName}.video.json`),
-        JSON.stringify(meta, null, 2)
-      );
+      // If MP4 format is requested, convert the WebM file to MP4
+      if (this.videoFormat === 'mp4' && session.mimeType.includes('webm')) {
+        await this._convertToMp4(session);
+      }
+
       logger.info('Feed writer: live video stream finalized', {
         sessionId,
         file: path.basename(session.videoPath),
         bytes: session.bytes,
+        format: path.extname(session.videoPath),
       });
       return session.videoPath;
     } catch (err) {
@@ -161,6 +172,54 @@ class FeedWriter {
       });
       return null;
     }
+  }
+
+  async _convertToMp4(session) {
+    const { execFile } = require('child_process');
+    const webmPath = session.videoPath;
+    const mp4Path = webmPath.replace(/\.webm$/, '.mp4');
+
+    return new Promise((resolve) => {
+      execFile(this.ffmpegPath, [
+        '-i', webmPath,
+        '-c:v', 'libx264',
+        '-preset', 'ultrafast',
+        '-c:a', 'aac',
+        '-y',
+        mp4Path,
+      ], (error) => {
+        if (error) {
+          if (error.code === 'ENOENT') {
+            logger.warn('Feed writer: ffmpeg not found in PATH', {
+              expected: this.ffmpegPath,
+              advice: 'Install ffmpeg: sudo apt install ffmpeg (Ubuntu) or brew install ffmpeg (macOS)',
+              keeping: 'WebM format',
+            });
+          } else {
+            logger.warn('Feed writer: ffmpeg conversion failed', {
+              webm: path.basename(webmPath),
+              error: error.message,
+            });
+          }
+          resolve();
+        } else {
+          try {
+            fs.unlinkSync(webmPath);
+            logger.info('Feed writer: converted WebM to MP4', {
+              webm: path.basename(webmPath),
+              mp4: path.basename(mp4Path),
+            });
+            session.videoPath = mp4Path;
+          } catch (err) {
+            logger.warn('Feed writer: failed to remove original WebM', {
+              file: webmPath,
+              error: err.message,
+            });
+          }
+          resolve();
+        }
+      });
+    });
   }
 
   _extForMime(mimeType) {

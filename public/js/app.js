@@ -61,9 +61,9 @@
     }
   });
 
-  socket.on('alertStatus', ({ alertId, delivered, message }) => {
-    ui.updateAlertStatus(alertId, delivered, message);
-    ui.updateSystemStat('apiStatus', delivered ? 'Alert Delivered' : 'Delivery Failed',
+  socket.on('alertStatus', ({ alertId, delivered }) => {
+    ui.updateAlertStatus(alertId, delivered);
+    ui.updateSystemStat('apiStatus', delivered ? 'Alarm raised' : 'Delivery Failed',
       delivered ? 'text-green' : 'text-red');
 
     setTimeout(() => {

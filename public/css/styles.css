@@ -46,9 +46,9 @@ body {
   gap: 12px;
 }
 
-.logo {
-  font-size: 28px;
-  color: var(--accent-blue);
+.brand-logo {
+  width: 36px;
+  height: auto;
 }
 
 .header h1 {

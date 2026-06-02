@@ -65,9 +65,14 @@ class AlertManager {
       this.tcpClient.sendAlert(alertPayload);
     }
 
+    const deliveryMethod = useApi && useSocket
+      ? 'api+socket'
+      : useApi ? 'api' : useSocket ? 'socket' : 'none';
+
     logger.info(`ALERT: ${alertType} [${severity}]`, {
       alertId: alertPayload.alertId,
       detectionCount: (detections || []).length,
+      deliveryMethod,
     });
 
     let result = { success: false, skipped: true };
@@ -77,31 +82,20 @@ class AlertManager {
 
     alertPayload.apiResponse = result;
 
-    // Build a UI status that reflects the configured channel, so a disabled
-    // API isn't reported as a failure.
     let delivered;
-    let statusMessage;
     if (channel === 'none') {
       delivered = true;
-      statusMessage = 'External delivery disabled';
     } else if (useApi && useSocket) {
       delivered = result.success;
-      statusMessage = result.success
-        ? 'API notified — alarm raised (socket sent)'
-        : 'API call failed (socket sent)';
     } else if (useApi) {
       delivered = result.success;
-      statusMessage = result.success ? 'API notified — alarm raised' : 'API call failed';
     } else {
-      // socket only
       delivered = true;
-      statusMessage = 'Alert sent via socket';
     }
 
     this.io.emit('alertStatus', {
       alertId: alertPayload.alertId,
       delivered,
-      message: statusMessage,
     });
 
     return alertPayload;
