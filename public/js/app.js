@@ -12,6 +12,11 @@
 
   const socket = io();
 
+  const liveStreamer = new LiveStreamer(socket, { idleMs: 6000, maxSessionMs: 120000 });
+
+  // Whether the server wants live video streamed on alerts (set via feedConfig).
+  let videoStreamingEnabled = false;
+
   let isDetecting = false;
   let frameCount = 0;
   let lastFpsTime = Date.now();
@@ -28,6 +33,7 @@
   socket.on('disconnect', () => {
     ui.updateSystemStat('serverStatus', 'Disconnected', 'text-red');
     stopDetection();
+    liveStreamer.stop();
     camera.stop();
     ui.updateStatus('SERVER OFFLINE', 'offline');
     ui.updateFPS(0);
@@ -41,13 +47,22 @@
     ui.setZones(zones);
   });
 
+  socket.on('feedConfig', (cfg) => {
+    videoStreamingEnabled = !!(cfg && cfg.enabled && (cfg.mode === 'video' || cfg.mode === 'both'));
+    console.log(`Feed config: enabled=${cfg && cfg.enabled}, mode=${cfg && cfg.mode}, video streaming=${videoStreamingEnabled}`);
+  });
+
   socket.on('alert', (alert) => {
     ui.addAlert(alert);
     flashScreen(alert.severity);
+    // Stream a live video feed while the activity is ongoing (if enabled).
+    if (videoStreamingEnabled) {
+      liveStreamer.notifyActivity(alert);
+    }
   });
 
-  socket.on('alertStatus', ({ alertId, delivered }) => {
-    ui.updateAlertStatus(alertId, delivered);
+  socket.on('alertStatus', ({ alertId, delivered, message }) => {
+    ui.updateAlertStatus(alertId, delivered, message);
     ui.updateSystemStat('apiStatus', delivered ? 'Alert Delivered' : 'Delivery Failed',
       delivered ? 'text-green' : 'text-red');
 
@@ -76,6 +91,7 @@
   btnStartStop.addEventListener('click', async () => {
     if (camera.isRunning) {
       stopDetection();
+      liveStreamer.stop();
       camera.stop();
       btnStartStop.textContent = 'Start Camera';
       ui.updateStatus('OFFLINE', 'offline');
@@ -88,6 +104,9 @@
         ui.resizeCanvas(video);
         btnStartStop.textContent = 'Stop Camera';
         ui.updateStatus('LIVE', 'live');
+
+        // Give the live streamer access to the camera stream.
+        liveStreamer.setStream(camera.stream);
 
         if (!engine.isReady) {
           const modelsOk = await initModels();

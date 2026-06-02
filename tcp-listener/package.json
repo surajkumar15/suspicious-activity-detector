@@ -1,0 +1,10 @@
+{
+  "name": "alert-tcp-listener",
+  "version": "1.0.0",
+  "description": "Standalone TCP server that listens on port 5555 for alert messages from the suspicious-activity-detector",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "license": "MIT"
+}

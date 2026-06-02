@@ -184,11 +184,11 @@ class UIManager {
     }
   }
 
-  updateAlertStatus(alertId, delivered) {
+  updateAlertStatus(alertId, delivered, message) {
     const el = document.getElementById(`alert-${alertId}`);
     if (el) {
       el.className = delivered ? 'alert-status delivered' : 'alert-status failed';
-      el.textContent = delivered ? 'API notified — alarm raised' : 'API call failed';
+      el.textContent = message || (delivered ? 'API notified — alarm raised' : 'API call failed');
     }
   }
 

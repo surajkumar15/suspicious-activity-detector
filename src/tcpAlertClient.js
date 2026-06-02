@@ -1,0 +1,105 @@
+const net = require('net');
+const config = require('./config');
+const logger = require('./logger');
+
+/**
+ * TcpAlertClient — maintains a persistent TCP connection to an external alert
+ * listener (default localhost:5555) and sends raw command strings when an alert
+ * is triggered.
+ *
+ * On each alert the following raw strings are written to the socket (each
+ * terminated by a newline so the listener can frame them):
+ *   send-alert
+ *   send-text
+ *
+ * The client auto-reconnects with a capped backoff if the listener is down, and
+ * silently no-ops (without crashing the detector) while disconnected.
+ */
+class TcpAlertClient {
+  constructor() {
+    this.enabled = config.tcp.enabled;
+    this.host = config.tcp.host;
+    this.port = config.tcp.port;
+    this.socket = null;
+    this.connected = false;
+    this.reconnectDelay = 1000;
+    this.maxReconnectDelay = 15000;
+    this.reconnectTimer = null;
+    this.stopped = false;
+
+    if (!this.enabled) {
+      logger.info('TCP alert client disabled (set TCP_ALERT_ENABLED=true to enable)');
+      return;
+    }
+
+    this._connect();
+  }
+
+  _connect() {
+    if (this.stopped) return;
+
+    this.socket = new net.Socket();
+
+    this.socket.connect(this.port, this.host, () => {
+      this.connected = true;
+      this.reconnectDelay = 1000;
+      logger.info(`TCP alert client connected → ${this.host}:${this.port}`);
+    });
+
+    this.socket.on('error', (err) => {
+      // Connection problems are expected when the listener is down; log quietly.
+      logger.debug(`TCP alert client error: ${err.message}`);
+    });
+
+    this.socket.on('close', () => {
+      if (this.connected) {
+        logger.warn('TCP alert client connection closed');
+      }
+      this.connected = false;
+      this._scheduleReconnect();
+    });
+  }
+
+  _scheduleReconnect() {
+    if (this.stopped || this.reconnectTimer) return;
+
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      this.reconnectDelay = Math.min(this.reconnectDelay * 2, this.maxReconnectDelay);
+      this._connect();
+    }, this.reconnectDelay);
+  }
+
+  /**
+   * Send the alert command strings to the listener.
+   * Called whenever an alert is triggered.
+   */
+  sendAlert() {
+    if (!this.enabled) return;
+    if (!this.connected || !this.socket) {
+      logger.debug('TCP alert client not connected; alert not forwarded');
+      return;
+    }
+
+    try {
+      this.socket.write('send-alert\n');
+      this.socket.write('send-text\n');
+    } catch (err) {
+      logger.error('TCP alert client failed to send', { error: err.message });
+    }
+  }
+
+  stop() {
+    this.stopped = true;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    if (this.socket) {
+      this.socket.destroy();
+      this.socket = null;
+    }
+  }
+}
+
+module.exports = TcpAlertClient;

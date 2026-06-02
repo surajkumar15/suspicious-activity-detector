@@ -1,12 +1,16 @@
 const logger = require('../logger');
+const config = require('../config');
 
 class FireAnalyzer {
   constructor(options = {}) {
-    this.redThreshold = options.redThreshold || 0.25;
+    this.redThreshold = options.redThreshold || config.fire.redThreshold;
+    this.brightnessThreshold = options.brightnessThreshold || config.fire.brightnessThreshold;
     this.flickerFrameCount = options.flickerFrameCount || 8;
-    this.consecutiveFramesRequired = options.consecutiveFramesRequired || 6;
+    this.flickerSensitivity = options.flickerSensitivity || config.fire.flickerSensitivity;
+    this.consecutiveFramesRequired = options.consecutiveFramesRequired || config.fire.consecutiveFrames;
     this.previousRedRatios = [];
     this.fireFrameCount = 0;
+    this.fireConfirmed = false;
   }
 
   analyze(frameAnalysis) {
@@ -23,32 +27,47 @@ class FireAnalyzer {
 
     const hasFlicker = this._detectFlicker();
     const hasFireColors = redOrangeRatio > this.redThreshold;
-    const hasHighBrightness = brightness > 0.7;
+    const hasHighBrightness = brightness > this.brightnessThreshold;
+
+    // logger.info('Fire check', {
+    //   redOrangeRatio: redOrangeRatio.toFixed(4),
+    //   brightness: brightness.toFixed(3),
+    //   hasFireColors,
+    //   hasFlicker,
+    //   hasHighBrightness,
+    //   fireFrameCount: this.fireFrameCount,
+    // });
 
     const isFireLikely = hasFireColors && hasFlicker && hasHighBrightness;
 
     if (isFireLikely) {
       this.fireFrameCount++;
+
+      // Confirm only while conditions actually hold, and only once per episode
+      // (latched until the streak resets), so decaying counts can't re-trigger.
+      if (this.fireFrameCount >= this.consecutiveFramesRequired && !this.fireConfirmed) {
+        this.fireConfirmed = true;
+        const confidence = this._calculateConfidence(redOrangeRatio, hasFlicker, hasHighBrightness);
+
+        alerts.push({
+          alertType: 'FIRE',
+          confidence: { visual: confidence },
+          detections: [],
+          metadata: {
+            redOrangeRatio,
+            brightness,
+            flickerDetected: hasFlicker,
+            consecutiveFrames: this.fireFrameCount,
+          },
+        });
+
+        logger.debug('Fire confirmed', { redOrangeRatio, brightness, flickerDetected: hasFlicker });
+      }
     } else {
       this.fireFrameCount = Math.max(0, this.fireFrameCount - 1);
-    }
-
-    if (this.fireFrameCount === this.consecutiveFramesRequired) {
-      const confidence = this._calculateConfidence(redOrangeRatio, hasFlicker, hasHighBrightness);
-
-      alerts.push({
-        alertType: 'FIRE',
-        confidence: { visual: confidence },
-        detections: [],
-        metadata: {
-          redOrangeRatio,
-          brightness,
-          flickerDetected: hasFlicker,
-          consecutiveFrames: this.fireFrameCount,
-        },
-      });
-
-      logger.debug('Fire confirmed', { redOrangeRatio, brightness, flickerDetected: hasFlicker });
+      if (this.fireFrameCount === 0) {
+        this.fireConfirmed = false; // streak ended; allow a future re-confirm
+      }
     }
 
     return alerts;
@@ -60,7 +79,7 @@ class FireAnalyzer {
     let changes = 0;
     for (let i = 1; i < this.previousRedRatios.length; i++) {
       const diff = Math.abs(this.previousRedRatios[i] - this.previousRedRatios[i - 1]);
-      if (diff > 0.05) changes++;
+      if (diff > this.flickerSensitivity) changes++;
     }
 
     return changes >= Math.floor(this.flickerFrameCount * 0.6);

@@ -1,0 +1,263 @@
+const fs = require('fs');
+const path = require('path');
+const config = require('./config');
+const logger = require('./logger');
+
+/**
+ * Writes snapshots of suspicious frames to a watched directory so an external
+ * process (e.g. a script running in WSL) can pick them up.
+ *
+ * Files are written atomically: data is first written to a `.tmp` file and then
+ * renamed into place. Because rename() is atomic on the same filesystem, a
+ * watcher that reacts to file-create events will never observe a partial file.
+ *
+ * For each suspicious frame two files are produced:
+ *   <name>.jpg   — the captured frame
+ *   <name>.json  — alert metadata (alertId, type, severity, timestamp, ...)
+ */
+class FeedWriter {
+  constructor() {
+    this.enabled = config.feed.enabled;
+    this.outputDir = config.feed.outputDir;
+    this.mode = config.feed.mode;
+    this.imageEnabled = this.mode === 'image' || this.mode === 'both';
+    this.videoEnabled = this.mode === 'video' || this.mode === 'both';
+
+    // FEED_MODE=off (or none) disables all capture even if FEED_OUTPUT_ENABLED is true.
+    if (this.mode === 'off' || this.mode === 'none') {
+      this.enabled = false;
+    }
+
+    if (!this.enabled) {
+      logger.info(`Feed writer disabled (FEED_OUTPUT_ENABLED=false or FEED_MODE=${this.mode})`);
+      return;
+    }
+
+    try {
+      fs.mkdirSync(this.outputDir, { recursive: true });
+      logger.info(`Feed writer enabled [mode=${this.mode}] → ${this.outputDir}`);
+    } catch (err) {
+      this.enabled = false;
+      logger.error('Failed to create feed output dir, disabling feed writer', {
+        dir: this.outputDir,
+        error: err.message,
+      });
+    }
+
+    // Active live-video streams keyed by sessionId.
+    this.streams = new Map();
+  }
+
+  // ─── Live video streaming ───────────────────────────
+  // A "session" represents one continuous recording triggered by suspicious
+  // activity. The browser streams encoded video chunks which are appended to a
+  // single growing file. An external process can tail this file live.
+
+  /**
+   * Open a new live-video file for a session.
+   * @param {object} info { sessionId, alertType, severity, mimeType }
+   * @returns {string|null} The video file path, or null if disabled/failed.
+   */
+  startStream(info) {
+    if (!this.enabled || !this.videoEnabled) return null;
+    if (!info || !info.sessionId) return null;
+    if (this.streams.has(info.sessionId)) {
+      return this.streams.get(info.sessionId).videoPath;
+    }
+
+    const ext = this._extForMime(info.mimeType);
+    const baseName = this._buildBaseName({
+      timestamp: new Date().toISOString(),
+      alertType: info.alertType,
+      alertId: info.sessionId,
+    });
+    const videoPath = path.join(this.outputDir, `${baseName}.${ext}`);
+
+    try {
+      const ws = fs.createWriteStream(videoPath);
+      this.streams.set(info.sessionId, {
+        ws,
+        videoPath,
+        baseName,
+        bytes: 0,
+        chunks: 0,
+        startedAt: new Date().toISOString(),
+        alertType: info.alertType,
+        severity: info.severity,
+        mimeType: info.mimeType || 'video/webm',
+      });
+      logger.info('Feed writer: live video stream started', {
+        sessionId: info.sessionId,
+        file: path.basename(videoPath),
+      });
+      return videoPath;
+    } catch (err) {
+      logger.error('Feed writer: failed to start video stream', {
+        sessionId: info.sessionId,
+        error: err.message,
+      });
+      return null;
+    }
+  }
+
+  /**
+   * Append one encoded video chunk to an open session file.
+   * @param {string} sessionId
+   * @param {Buffer|ArrayBuffer|TypedArray} data
+   */
+  appendChunk(sessionId, data) {
+    const session = this.streams.get(sessionId);
+    if (!session) return false;
+
+    const buffer = this._toBuffer(data);
+    if (!buffer || buffer.length === 0) return false;
+
+    session.ws.write(buffer);
+    session.bytes += buffer.length;
+    session.chunks += 1;
+    return true;
+  }
+
+  /**
+   * Finalize a session: close the file and write a `.json` sidecar so the
+   * watcher knows the clip is complete.
+   * @param {string} sessionId
+   * @returns {Promise<string|null>} Video path, or null.
+   */
+  async endStream(sessionId) {
+    const session = this.streams.get(sessionId);
+    if (!session) return null;
+    this.streams.delete(sessionId);
+
+    await new Promise((resolve) => session.ws.end(resolve));
+
+    const meta = {
+      sessionId,
+      startedAt: session.startedAt,
+      endedAt: new Date().toISOString(),
+      alertType: session.alertType,
+      severity: session.severity,
+      mimeType: session.mimeType,
+      bytes: session.bytes,
+      chunks: session.chunks,
+      video: path.basename(session.videoPath),
+    };
+
+    try {
+      await this._atomicWrite(
+        path.join(this.outputDir, `${session.baseName}.video.json`),
+        JSON.stringify(meta, null, 2)
+      );
+      logger.info('Feed writer: live video stream finalized', {
+        sessionId,
+        file: path.basename(session.videoPath),
+        bytes: session.bytes,
+      });
+      return session.videoPath;
+    } catch (err) {
+      logger.error('Feed writer: failed to finalize video stream', {
+        sessionId,
+        error: err.message,
+      });
+      return null;
+    }
+  }
+
+  _extForMime(mimeType) {
+    if (mimeType && mimeType.includes('mp4')) return 'mp4';
+    return 'webm';
+  }
+
+  _toBuffer(data) {
+    if (!data) return null;
+    if (Buffer.isBuffer(data)) return data;
+    if (data instanceof ArrayBuffer) return Buffer.from(data);
+    if (ArrayBuffer.isView(data)) {
+      return Buffer.from(data.buffer, data.byteOffset, data.byteLength);
+    }
+    return null;
+  }
+
+  /**
+   * Persist the snapshot for a processed alert.
+   * @param {object} alert Alert payload produced by AlertManager.
+   * @returns {Promise<string|null>} Path to the written image, or null.
+   */
+  async write(alert) {
+    if (!this.enabled || !this.imageEnabled) return null;
+
+    const buffer = this._decodeSnapshot(alert.snapshot);
+    if (!buffer) {
+      logger.debug('Feed writer: alert has no decodable snapshot, skipping', {
+        alertId: alert.alertId,
+      });
+      return null;
+    }
+
+    const baseName = this._buildBaseName(alert);
+    const imagePath = path.join(this.outputDir, `${baseName}.jpg`);
+    const metaPath = path.join(this.outputDir, `${baseName}.json`);
+
+    const meta = {
+      alertId: alert.alertId,
+      timestamp: alert.timestamp,
+      cameraId: alert.cameraId,
+      alertType: alert.alertType,
+      severity: alert.severity,
+      confidence: alert.confidence,
+      detections: alert.detections,
+      metadata: alert.metadata,
+      image: path.basename(imagePath),
+    };
+
+    try {
+      // Write the image first, then the metadata. The metadata file appearing
+      // is the signal that the (larger) image is fully on disk.
+      await this._atomicWrite(imagePath, buffer);
+      await this._atomicWrite(metaPath, JSON.stringify(meta, null, 2));
+
+      logger.info('Feed writer: suspicious frame saved', {
+        alertId: alert.alertId,
+        file: path.basename(imagePath),
+      });
+      return imagePath;
+    } catch (err) {
+      logger.error('Feed writer: failed to save frame', {
+        alertId: alert.alertId,
+        error: err.message,
+      });
+      return null;
+    }
+  }
+
+  _decodeSnapshot(snapshot) {
+    if (!snapshot || typeof snapshot !== 'string') return null;
+
+    // Accept either a data URL ("data:image/jpeg;base64,....") or raw base64.
+    const match = snapshot.match(/^data:image\/\w+;base64,(.+)$/);
+    const base64 = match ? match[1] : snapshot;
+
+    try {
+      const buffer = Buffer.from(base64, 'base64');
+      return buffer.length > 0 ? buffer : null;
+    } catch {
+      return null;
+    }
+  }
+
+  _buildBaseName(alert) {
+    // Filesystem-safe, sortable name: 2026-06-02T07-41-26-788Z_FIRE_<id8>
+    const ts = (alert.timestamp || new Date().toISOString()).replace(/[:.]/g, '-');
+    const type = (alert.alertType || 'UNKNOWN').replace(/[^A-Z0-9_]/gi, '');
+    const id = (alert.alertId || '').split('-')[0] || 'noid';
+    return `${ts}_${type}_${id}`;
+  }
+
+  async _atomicWrite(targetPath, data) {
+    const tmpPath = `${targetPath}.${process.pid}.tmp`;
+    await fs.promises.writeFile(tmpPath, data);
+    await fs.promises.rename(tmpPath, targetPath);
+  }
+}
+
+module.exports = FeedWriter;

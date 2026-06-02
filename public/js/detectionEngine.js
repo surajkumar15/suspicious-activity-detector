@@ -104,8 +104,10 @@ class DetectionEngine {
       if (brightness > peakBrightness) peakBrightness = brightness;
       if (brightness > 0.95) brightPixels++;
 
-      if (r > 180 && g < 120 && b < 80) redOrangePixels++;
-      if (r > 200 && g > 100 && g < 180 && b < 60) redOrangePixels++;
+      // Flame colors only. Flames are bright, red-dominant, and carry little
+      // blue relative to red. The blue limit rejects skin/wood/beige walls
+      // (warm but blue-rich) while still matching red, orange and yellow flames.
+      if (r > 150 && g < r * 0.95 && b < r * 0.6) redOrangePixels++;
     }
 
     if (this.previousFrame) {

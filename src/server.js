@@ -82,6 +82,12 @@ app.put('/api/zones', (req, res) => {
 io.on('connection', (socket) => {
   logger.info(`Client connected: ${socket.id}`);
 
+  // Tell the client what to capture so it only streams video when needed.
+  socket.emit('feedConfig', {
+    enabled: config.feed.enabled,
+    mode: config.feed.mode,
+  });
+
   socket.on('getZones', () => {
     socket.emit('zones', zones);
   });
@@ -123,8 +129,36 @@ io.on('connection', (socket) => {
     }
   });
 
+  // ─── Live Video Streaming ──────────────────────────
+  // When the client detects suspicious activity it opens a video session and
+  // streams encoded chunks here, which are appended to a growing file on disk.
+  const feedWriter = alertManager.feedWriter;
+  const clientSessions = new Set();
+
+  socket.on('videoStart', (info) => {
+    if (!info || !info.sessionId) return;
+    const p = feedWriter.startStream(info);
+    if (p) clientSessions.add(info.sessionId);
+  });
+
+  socket.on('videoChunk', (payload) => {
+    if (!payload || !payload.sessionId) return;
+    feedWriter.appendChunk(payload.sessionId, payload.data);
+  });
+
+  socket.on('videoEnd', async (payload) => {
+    if (!payload || !payload.sessionId) return;
+    clientSessions.delete(payload.sessionId);
+    await feedWriter.endStream(payload.sessionId);
+  });
+
   socket.on('disconnect', () => {
     logger.info(`Client disconnected: ${socket.id}`);
+    // Finalize any video sessions left open by this client.
+    for (const sessionId of clientSessions) {
+      feedWriter.endStream(sessionId).catch(() => {});
+    }
+    clientSessions.clear();
   });
 });
 

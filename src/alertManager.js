@@ -2,6 +2,8 @@ const { v4: uuidv4 } = require('uuid');
 const config = require('./config');
 const logger = require('./logger');
 const alertService = require('./alertService');
+const FeedWriter = require('./feedWriter');
+const TcpAlertClient = require('./tcpAlertClient');
 
 const SEVERITY_MAP = {
   GUNFIRE: 'CRITICAL',
@@ -16,6 +18,8 @@ class AlertManager {
     this.lastAlertTimes = new Map();
     this.alertHistory = [];
     this.maxHistorySize = 200;
+    this.feedWriter = new FeedWriter();
+    this.tcpClient = new TcpAlertClient();
   }
 
   async processDetection(detectionData) {
@@ -46,17 +50,58 @@ class AlertManager {
 
     this.io.emit('alert', alertPayload);
 
+    // Persist the suspicious frame to disk for any external watcher process.
+    this.feedWriter.write(alertPayload).catch((err) => {
+      logger.error('Feed writer error', { error: err.message });
+    });
+
+    // Forward the alert to external systems based on the configured channel.
+    const channel = config.alert.channel;
+    const useApi = channel === 'api' || channel === 'both';
+    const useSocket = channel === 'socket' || channel === 'both';
+
+    if (useSocket) {
+      // Send to the external TCP listener (send-alert / send-text).
+      this.tcpClient.sendAlert(alertPayload);
+    }
+
     logger.info(`ALERT: ${alertType} [${severity}]`, {
       alertId: alertPayload.alertId,
       detectionCount: (detections || []).length,
     });
 
-    const result = await alertService.sendAlert(alertPayload);
+    let result = { success: false, skipped: true };
+    if (useApi) {
+      result = await alertService.sendAlert(alertPayload);
+    }
 
     alertPayload.apiResponse = result;
+
+    // Build a UI status that reflects the configured channel, so a disabled
+    // API isn't reported as a failure.
+    let delivered;
+    let statusMessage;
+    if (channel === 'none') {
+      delivered = true;
+      statusMessage = 'External delivery disabled';
+    } else if (useApi && useSocket) {
+      delivered = result.success;
+      statusMessage = result.success
+        ? 'API notified — alarm raised (socket sent)'
+        : 'API call failed (socket sent)';
+    } else if (useApi) {
+      delivered = result.success;
+      statusMessage = result.success ? 'API notified — alarm raised' : 'API call failed';
+    } else {
+      // socket only
+      delivered = true;
+      statusMessage = 'Alert sent via socket';
+    }
+
     this.io.emit('alertStatus', {
       alertId: alertPayload.alertId,
-      delivered: result.success,
+      delivered,
+      message: statusMessage,
     });
 
     return alertPayload;
