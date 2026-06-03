@@ -22,8 +22,10 @@ class AlertManager {
     this.maxHistorySize = 200;
     this.feedWriter = new FeedWriter();
     this.tcpClient = new TcpAlertClient();
-    this.locationLogPath = path.join(__dirname, '..', 'logs', 'alert-locations.txt');
-    fs.mkdirSync(path.dirname(this.locationLogPath), { recursive: true });
+    this.textOutputDir = config.textOutputDir;
+    this.locationLogPath = path.join(this.textOutputDir, 'alert-locations.txt');
+    this.messageLogPath = path.join(this.textOutputDir, 'alert-message.txt');
+    fs.mkdirSync(this.textOutputDir, { recursive: true });
   }
 
   async processDetection(detectionData) {
@@ -56,11 +58,6 @@ class AlertManager {
     logger.info(`[AlertEmit] Emitting alert to client: alertId=${alertPayload.alertId}, alertType=${alertPayload.alertType}`);
     this.io.emit('alert', alertPayload);
 
-    // Write alert location data to a text file for external consumption.
-    this._writeAlertLocation(alertPayload).catch((err) => {
-      logger.error('Failed to write alert location', { error: err.message });
-    });
-
     // Persist the suspicious frame to disk for any external watcher process.
     this.feedWriter.write(alertPayload).catch((err) => {
       logger.error('Feed writer error', { error: err.message });
@@ -72,15 +69,26 @@ class AlertManager {
     const useSocket = channel === 'socket' || channel === 'both';
 
     if (useSocket) {
-      // Send the basic alert command immediately to the external TCP listener.
-      // The detailed file transfer command (`send-file`) will be sent later
-      // when the video file is finalized by the feed writer.
+      // 1. Send the basic alert command immediately to the external TCP listener.
       try {
         this.tcpClient.sendAlert();
         logger.info(`TCP alert forwarded immediately for alertId=${alertPayload.alertId}`);
       } catch (err) {
         logger.warn('Failed to forward TCP alert immediately', { error: err.message });
       }
+
+      // 2. Write the alert type to the message text file, then send 'send-text'.
+      this._writeAlertText(alertPayload)
+        .then(() => this.tcpClient.sendText())
+        .catch((err) => logger.error('Failed to write alert text / send-text', { error: err.message }));
+
+      // 3. Write the location to the location text file, then send 'send-location'.
+      this._writeAlertLocation(alertPayload)
+        .then(() => this.tcpClient.sendLocation())
+        .catch((err) => logger.error('Failed to write alert location / send-location', { error: err.message }));
+
+      // 4. The 'send-file' command is sent later, when the video file is
+      //    finalized by the feed writer (see sendFileViaSocket / videoEnd).
     }
 
     const deliveryMethod = useApi && useSocket
@@ -175,8 +183,12 @@ class AlertManager {
 
   async _writeAlertLocation(alertPayload) {
     const location = this._getAlertLocation(alertPayload);
-    const line = `${alertPayload.timestamp} | ${alertPayload.alertType} | ${location}\n`;
-    await fs.promises.appendFile(this.locationLogPath, line, 'utf8');
+    await fs.promises.writeFile(this.locationLogPath, `${location}\n`, 'utf8');
+  }
+
+  async _writeAlertText(alertPayload) {
+    const line = `${alertPayload.alertType} | severity=${alertPayload.severity}\n`;
+    await fs.promises.writeFile(this.messageLogPath, line, 'utf8');
   }
 
   sendAlertViaSocket(alertId) {

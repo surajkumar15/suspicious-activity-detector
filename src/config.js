@@ -102,6 +102,12 @@ const config = {
     // Path to ffmpeg executable for MP4 conversion (optional)
     ffmpegPath: process.env.FFMPEG_PATH || 'ffmpeg',
   },
+
+  // Directory where the text files (alert message + location) are overwritten
+  // on every alert for external consumption.
+  textOutputDir: process.env.TEXT_OUTPUT_DIR
+    ? require('path').resolve(process.env.TEXT_OUTPUT_DIR)
+    : require('path').join(__dirname, '..', 'logs'),
 };
 
 module.exports = config;

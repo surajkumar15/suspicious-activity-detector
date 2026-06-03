@@ -119,6 +119,52 @@ class TcpAlertClient {
     }
   }
 
+  /**
+   * Send a 'send-text' command to the listener.
+   * The listener is expected to handle alert type metadata from the text file.
+   */
+  sendText() {
+    logger.debug(`[TcpAlert] sendText called - enabled: ${this.enabled}`);
+    if (!this.enabled) {
+      logger.warn('[TcpAlert] TCP alert client disabled (TCP_ALERT_ENABLED not set to true)');
+      return;
+    }
+    if (!this.connected || !this.socket) {
+      logger.warn(`[TcpAlert] TCP alert client not connected (connected: ${this.connected}, socket: ${!!this.socket}); send-text not forwarded`);
+      return;
+    }
+
+    try {
+      this.socket.write('send-text\n');
+      logger.info('[TcpAlert] Successfully sent send-text command');
+    } catch (err) {
+      logger.error('[TcpAlert] Failed to send send-text', { error: err.message });
+    }
+  }
+
+  /**
+   * Send a 'send-location' command to the listener.
+   * The listener is expected to handle geolocation data from the location file.
+   */
+  sendLocation() {
+    logger.debug(`[TcpAlert] sendLocation called - enabled: ${this.enabled}`);
+    if (!this.enabled) {
+      logger.warn('[TcpAlert] TCP alert client disabled (TCP_ALERT_ENABLED not set to true)');
+      return;
+    }
+    if (!this.connected || !this.socket) {
+      logger.warn(`[TcpAlert] TCP alert client not connected (connected: ${this.connected}, socket: ${!!this.socket}); send-location not forwarded`);
+      return;
+    }
+
+    try {
+      this.socket.write('send-location\n');
+      logger.info('[TcpAlert] Successfully sent send-location command');
+    } catch (err) {
+      logger.error('[TcpAlert] Failed to send send-location', { error: err.message });
+    }
+  }
+
   stop() {
     this.stopped = true;
     if (this.reconnectTimer) {
