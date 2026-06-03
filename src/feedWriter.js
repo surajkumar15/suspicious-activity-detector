@@ -62,7 +62,7 @@ class FeedWriter {
    * @returns {string|null} The video file path, or null if disabled/failed.
    */
   startStream(info) {
-    if (!this.enabled || !this.videoEnabled) return null;
+    if (!this.enabled || !this.videoEnabled || config.feed.recordingEnabled === false) return null;
     if (!info || !info.sessionId) return null;
     if (this.streams.has(info.sessionId)) {
       return this.streams.get(info.sessionId).videoPath;

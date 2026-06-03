@@ -85,6 +85,16 @@ const config = {
     // When enabled, suspicious activity is written to disk for an external
     // process (e.g. a script running in WSL) to consume.
     enabled: process.env.FEED_OUTPUT_ENABLED === 'true',
+    // When disabled, the browser will not start live video streaming.
+    // Defaults to FEED_OUTPUT_ENABLED for backward compatibility.
+    recordingEnabled: process.env.FEED_RECORDING_ENABLED != null
+      ? process.env.FEED_RECORDING_ENABLED === 'true'
+      : process.env.FEED_OUTPUT_ENABLED === 'true',
+    // When disabled, the server will not emit the send-file event after video
+    // finalization. Defaults to FEED_OUTPUT_ENABLED for backward compatibility.
+    sendFileEnabled: process.env.FEED_SEND_FILE_ENABLED != null
+      ? process.env.FEED_SEND_FILE_ENABLED === 'true'
+      : process.env.FEED_OUTPUT_ENABLED === 'true',
     // What to capture on each alert:
     //   image → save a snapshot JPEG only
     //   video → stream a live video clip only

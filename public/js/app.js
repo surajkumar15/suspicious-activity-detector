@@ -74,13 +74,13 @@
   });
 
   socket.on('feedConfig', (cfg) => {
-    videoStreamingEnabled = !!(cfg && cfg.enabled && (cfg.mode === 'video' || cfg.mode === 'both'));
+    videoStreamingEnabled = !!(cfg && cfg.enabled && cfg.recordingEnabled && (cfg.mode === 'video' || cfg.mode === 'both'));
     // Apply server-configured idle timeout to the live streamer
     if (cfg && cfg.clientVideoIdleMs) {
       liveStreamer.idleMs = cfg.clientVideoIdleMs;
-      console.log(`Feed config: enabled=${cfg.enabled}, mode=${cfg.mode}, video streaming=${videoStreamingEnabled}, idleMs=${cfg.clientVideoIdleMs}`);
+      console.log(`Feed config: enabled=${cfg.enabled}, recordingEnabled=${cfg.recordingEnabled}, sendFileEnabled=${cfg.sendFileEnabled}, mode=${cfg.mode}, video streaming=${videoStreamingEnabled}, idleMs=${cfg.clientVideoIdleMs}`);
     } else {
-      console.log(`Feed config: enabled=${cfg && cfg.enabled}, mode=${cfg && cfg.mode}, video streaming=${videoStreamingEnabled}`);
+      console.log(`Feed config: enabled=${cfg && cfg.enabled}, recordingEnabled=${cfg && cfg.recordingEnabled}, sendFileEnabled=${cfg && cfg.sendFileEnabled}, mode=${cfg && cfg.mode}, video streaming=${videoStreamingEnabled}`);
     }
   });
 

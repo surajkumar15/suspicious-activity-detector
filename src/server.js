@@ -85,6 +85,8 @@ io.on('connection', (socket) => {
   // Tell the client what to capture so it only streams video when needed.
   socket.emit('feedConfig', {
     enabled: config.feed.enabled,
+    recordingEnabled: config.feed.recordingEnabled,
+    sendFileEnabled: config.feed.sendFileEnabled,
     mode: config.feed.mode,
     videoDurationSec: config.feed.videoDurationSec,
     clientVideoIdleMs: config.feed.clientVideoIdleMs,
@@ -169,13 +171,15 @@ io.on('connection', (socket) => {
     const videoPath = await feedWriter.endStream(payload.sessionId);
 
     // Send a 'send-file' command via TCP now that the video file is finalized.
-    if (alertId) {
+    if (alertId && config.feed.sendFileEnabled) {
       logger.info(`[VideoEnd] Triggering send-file for alertId: ${alertId}, file=${videoPath}`);
       if (videoPath) {
         alertManager.sendFileViaSocket(alertId, videoPath);
       } else {
         logger.warn(`[VideoEnd] No videoPath returned for sessionId: ${payload.sessionId}`);
       }
+    } else if (!config.feed.sendFileEnabled) {
+      logger.info(`[VideoEnd] send-file disabled via config for sessionId: ${payload.sessionId}`);
     } else {
       logger.warn(`[VideoEnd] No alertId found for sessionId: ${payload.sessionId}`);
     }
