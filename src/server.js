@@ -86,6 +86,8 @@ io.on('connection', (socket) => {
   socket.emit('feedConfig', {
     enabled: config.feed.enabled,
     mode: config.feed.mode,
+    videoDurationSec: config.feed.videoDurationSec,
+    clientVideoIdleMs: config.feed.clientVideoIdleMs,
   });
 
   socket.on('getZones', () => {
@@ -94,7 +96,7 @@ io.on('connection', (socket) => {
 
   socket.on('detection', async (data) => {
     try {
-      const { objects, poses, frameAnalysis, motionDetected, snapshot } = data;
+      const { objects, poses, frameAnalysis, motionDetected, snapshot, metadata } = data;
       const allAlerts = [];
 
       // 1. Fire detection — red/orange color + flicker
@@ -122,6 +124,10 @@ io.on('connection', (socket) => {
       // Process each alert → send to external API
       for (const alert of allAlerts) {
         alert.snapshot = snapshot;
+        alert.metadata = {
+          ...(metadata || {}),
+          ...(alert.metadata || {}),
+        };
         await alertManager.processDetection(alert);
       }
     } catch (error) {
@@ -134,11 +140,19 @@ io.on('connection', (socket) => {
   // streams encoded chunks here, which are appended to a growing file on disk.
   const feedWriter = alertManager.feedWriter;
   const clientSessions = new Set();
+  const sessionAlertMap = new Map();
 
   socket.on('videoStart', (info) => {
     if (!info || !info.sessionId) return;
+    logger.info(`[VideoStart] Received: sessionId=${info.sessionId}, alertId=${info.alertId}, alertType=${info.alertType}`);
     const p = feedWriter.startStream(info);
     if (p) clientSessions.add(info.sessionId);
+    if (info.alertId) {
+      logger.info(`[VideoStart] Storing alertId mapping: sessionId=${info.sessionId} -> alertId=${info.alertId}`);
+      sessionAlertMap.set(info.sessionId, info.alertId);
+    } else {
+      logger.warn(`[VideoStart] No alertId in videoStart payload for sessionId=${info.sessionId}`);
+    }
   });
 
   socket.on('videoChunk', (payload) => {
@@ -148,8 +162,23 @@ io.on('connection', (socket) => {
 
   socket.on('videoEnd', async (payload) => {
     if (!payload || !payload.sessionId) return;
+    const alertId = sessionAlertMap.get(payload.sessionId);
+    logger.info(`[VideoEnd] sessionId: ${payload.sessionId}, alertId: ${alertId}`);
     clientSessions.delete(payload.sessionId);
-    await feedWriter.endStream(payload.sessionId);
+    sessionAlertMap.delete(payload.sessionId);
+    const videoPath = await feedWriter.endStream(payload.sessionId);
+
+    // Send a 'send-file' command via TCP now that the video file is finalized.
+    if (alertId) {
+      logger.info(`[VideoEnd] Triggering send-file for alertId: ${alertId}, file=${videoPath}`);
+      if (videoPath) {
+        alertManager.sendFileViaSocket(alertId, videoPath);
+      } else {
+        logger.warn(`[VideoEnd] No videoPath returned for sessionId: ${payload.sessionId}`);
+      }
+    } else {
+      logger.warn(`[VideoEnd] No alertId found for sessionId: ${payload.sessionId}`);
+    }
   });
 
   socket.on('disconnect', () => {

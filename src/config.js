@@ -95,6 +95,8 @@ const config = {
       : require('path').join(__dirname, '..', 'captures'),
     // Video capture duration (seconds) when alert is triggered
     videoDurationSec: parseInt(process.env.VIDEO_DURATION_SEC, 10) || 10,
+    // Client-side idle timeout (milliseconds) — how long to keep recording after activity stops
+    clientVideoIdleMs: parseInt(process.env.CLIENT_VIDEO_IDLE_MS, 10) || 6000,
     // Video output format: webm (browser native) or mp4 (requires ffmpeg)
     videoFormat: (process.env.VIDEO_FORMAT || 'webm').toLowerCase(),
     // Path to ffmpeg executable for MP4 conversion (optional)

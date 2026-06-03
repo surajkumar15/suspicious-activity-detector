@@ -1,4 +1,6 @@
 const { v4: uuidv4 } = require('uuid');
+const fs = require('fs');
+const path = require('path');
 const config = require('./config');
 const logger = require('./logger');
 const alertService = require('./alertService');
@@ -20,6 +22,8 @@ class AlertManager {
     this.maxHistorySize = 200;
     this.feedWriter = new FeedWriter();
     this.tcpClient = new TcpAlertClient();
+    this.locationLogPath = path.join(__dirname, '..', 'logs', 'alert-locations.txt');
+    fs.mkdirSync(path.dirname(this.locationLogPath), { recursive: true });
   }
 
   async processDetection(detectionData) {
@@ -31,6 +35,7 @@ class AlertManager {
     }
 
     const severity = SEVERITY_MAP[alertType] || 'LOW';
+    const metadataWithLocation = metadata || {};
 
     const alertPayload = {
       alertId: uuidv4(),
@@ -40,7 +45,7 @@ class AlertManager {
       severity,
       confidence: confidence || null,
       detections: detections || [],
-      metadata: metadata || {},
+      metadata: metadataWithLocation,
       snapshot: snapshot || null,
     };
 
@@ -48,7 +53,13 @@ class AlertManager {
 
     this._addToHistory(alertPayload);
 
+    logger.info(`[AlertEmit] Emitting alert to client: alertId=${alertPayload.alertId}, alertType=${alertPayload.alertType}`);
     this.io.emit('alert', alertPayload);
+
+    // Write alert location data to a text file for external consumption.
+    this._writeAlertLocation(alertPayload).catch((err) => {
+      logger.error('Failed to write alert location', { error: err.message });
+    });
 
     // Persist the suspicious frame to disk for any external watcher process.
     this.feedWriter.write(alertPayload).catch((err) => {
@@ -61,8 +72,15 @@ class AlertManager {
     const useSocket = channel === 'socket' || channel === 'both';
 
     if (useSocket) {
-      // Send to the external TCP listener (send-alert / send-text).
-      this.tcpClient.sendAlert(alertPayload);
+      // Send the basic alert command immediately to the external TCP listener.
+      // The detailed file transfer command (`send-file`) will be sent later
+      // when the video file is finalized by the feed writer.
+      try {
+        this.tcpClient.sendAlert();
+        logger.info(`TCP alert forwarded immediately for alertId=${alertPayload.alertId}`);
+      } catch (err) {
+        logger.warn('Failed to forward TCP alert immediately', { error: err.message });
+      }
     }
 
     const deliveryMethod = useApi && useSocket
@@ -129,6 +147,52 @@ class AlertManager {
       counts[alert.alertType] = (counts[alert.alertType] || 0) + 1;
     }
     return { totalAlerts: this.alertHistory.length, byType: counts };
+  }
+
+  _getAlertLocation(alertPayload) {
+    const location = alertPayload.metadata && alertPayload.metadata.location;
+    if (location) {
+      if (typeof location === 'object' && location.latitude != null && location.longitude != null) {
+        return `${location.latitude},${location.longitude}`;
+      }
+      return String(location);
+    }
+
+    if (alertPayload.metadata && alertPayload.metadata.zoneName) {
+      return `Zone: ${alertPayload.metadata.zoneName}`;
+    }
+
+    if (alertPayload.metadata && alertPayload.metadata.zoneId) {
+      return `Zone ID: ${alertPayload.metadata.zoneId}`;
+    }
+
+    if (alertPayload.cameraId) {
+      return `Camera: ${alertPayload.cameraId}`;
+    }
+
+    return 'unknown';
+  }
+
+  async _writeAlertLocation(alertPayload) {
+    const location = this._getAlertLocation(alertPayload);
+    const line = `${alertPayload.timestamp} | ${alertPayload.alertType} | ${location}\n`;
+    await fs.promises.appendFile(this.locationLogPath, line, 'utf8');
+  }
+
+  sendAlertViaSocket(alertId) {
+    logger.info(`[AlertManager] sendAlertViaSocket called for alertId: ${alertId}, tcpClient.connected: ${this.tcpClient.connected}, tcpClient.enabled: ${this.tcpClient.enabled}`);
+    this.tcpClient.sendAlert();
+    logger.info(`[AlertManager] TCP alert triggered for alertId: ${alertId}`);
+  }
+
+  sendFileViaSocket(alertId, filePath) {
+    logger.info(`[AlertManager] sendFileViaSocket called for alertId: ${alertId}, file=${filePath}`);
+    try {
+      this.tcpClient.sendFile(filePath);
+      logger.info(`[AlertManager] send-file command sent for alertId: ${alertId}`);
+    } catch (err) {
+      logger.error('[AlertManager] Failed to send-file via TCP', { error: err.message, alertId, filePath });
+    }
   }
 }
 

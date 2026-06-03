@@ -48,6 +48,7 @@ class LiveStreamer {
 
   /** Signal that suspicious activity is happening right now. */
   notifyActivity(alert) {
+    console.log(`[notifyActivity] Called with alert: alertId=${alert ? alert.alertId : 'null'}, alertType=${alert ? alert.alertType : 'null'}`);
     if (!this.stream || !window.MediaRecorder) return;
 
     if (!this.sessionId) {
@@ -69,8 +70,10 @@ class LiveStreamer {
 
     this.sessionId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
+    console.log(`[VideoRecorder] videoStart emitted: sessionId=${this.sessionId}, alertId=${alert ? alert.alertId : null}`);
     this.socket.emit('videoStart', {
       sessionId: this.sessionId,
+      alertId: alert ? alert.alertId : null,
       alertType: alert ? alert.alertType : 'UNKNOWN',
       severity: alert ? alert.severity : null,
       mimeType: this.mimeType || 'video/webm',
@@ -91,7 +94,10 @@ class LiveStreamer {
       const ended = this.sessionId;
       this.sessionId = null;
       this.recorder = null;
-      if (ended) this.socket.emit('videoEnd', { sessionId: ended });
+      if (ended) {
+        console.log(`[VideoRecorder] videoEnd emitted: sessionId=${ended}`);
+        this.socket.emit('videoEnd', { sessionId: ended });
+      }
     };
 
     this.recorder.start(this.timesliceMs);

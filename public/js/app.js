@@ -12,7 +12,7 @@
 
   const socket = io();
 
-  const liveStreamer = new LiveStreamer(socket, { idleMs: 6000, maxSessionMs: 120000 });
+  let liveStreamer = new LiveStreamer(socket, { idleMs: 6000, maxSessionMs: 120000 });
 
   // Whether the server wants live video streamed on alerts (set via feedConfig).
   let videoStreamingEnabled = false;
@@ -20,6 +20,32 @@
   let isDetecting = false;
   let frameCount = 0;
   let lastFpsTime = Date.now();
+  let currentLocation = null;
+
+  function initGeolocation() {
+    if (!navigator.geolocation) {
+      console.warn('Browser does not support geolocation');
+      return;
+    }
+
+    navigator.geolocation.watchPosition(
+      (position) => {
+        currentLocation = {
+          latitude: position.coords.latitude,
+          longitude: position.coords.longitude,
+        };
+        console.log('Geolocation acquired', currentLocation);
+      },
+      (error) => {
+        console.warn('Geolocation error', error);
+      },
+      {
+        enableHighAccuracy: true,
+        maximumAge: 10000,
+        timeout: 10000,
+      }
+    );
+  }
 
   // ─── Socket Connection ──────────────────────────────
   socket.on('connect', () => {
@@ -49,14 +75,22 @@
 
   socket.on('feedConfig', (cfg) => {
     videoStreamingEnabled = !!(cfg && cfg.enabled && (cfg.mode === 'video' || cfg.mode === 'both'));
-    console.log(`Feed config: enabled=${cfg && cfg.enabled}, mode=${cfg && cfg.mode}, video streaming=${videoStreamingEnabled}`);
+    // Apply server-configured idle timeout to the live streamer
+    if (cfg && cfg.clientVideoIdleMs) {
+      liveStreamer.idleMs = cfg.clientVideoIdleMs;
+      console.log(`Feed config: enabled=${cfg.enabled}, mode=${cfg.mode}, video streaming=${videoStreamingEnabled}, idleMs=${cfg.clientVideoIdleMs}`);
+    } else {
+      console.log(`Feed config: enabled=${cfg && cfg.enabled}, mode=${cfg && cfg.mode}, video streaming=${videoStreamingEnabled}`);
+    }
   });
 
   socket.on('alert', (alert) => {
+    console.log(`[Alert Received] alertId=${alert.alertId}, alertType=${alert.alertType}, videoStreamingEnabled=${videoStreamingEnabled}`);
     ui.addAlert(alert);
     flashScreen(alert.severity);
     // Stream a live video feed while the activity is ongoing (if enabled).
     if (videoStreamingEnabled) {
+      console.log(`[Alert] Calling notifyActivity with alertId=${alert.alertId}`);
       liveStreamer.notifyActivity(alert);
     }
   });
@@ -153,7 +187,7 @@
         ui.updateTimestamp();
 
         if (results.objects.length > 0 || results.motionDetected) {
-          socket.emit('detection', {
+          const detectionPayload = {
             objects: results.objects,
             poses: results.poses.map(p => ({
               keypoints: p.keypoints,
@@ -162,7 +196,13 @@
             frameAnalysis: results.frameAnalysis,
             motionDetected: results.motionDetected,
             snapshot: results.objects.length > 0 ? camera.captureSnapshot() : null,
-          });
+          };
+
+          if (currentLocation) {
+            detectionPayload.metadata = { location: currentLocation };
+          }
+
+          socket.emit('detection', detectionPayload);
         }
 
         frameCount++;
@@ -260,6 +300,7 @@
   // ─── Auto-start camera on load ──────────────────────
   window.addEventListener('load', () => {
     ui.updateStatus('READY', 'loading');
+    initGeolocation();
 
     // Auto-start: click the button programmatically
     setTimeout(() => {

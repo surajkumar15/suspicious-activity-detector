@@ -68,13 +68,18 @@ class FeedWriter {
       return this.streams.get(info.sessionId).videoPath;
     }
 
-    const ext = this.videoFormat === 'mp4' ? 'mp4' : this._extForMime(info.mimeType);
+    // Use the incoming container extension (usually .webm) for the
+    // live stream file. If the configured `videoFormat` is 'mp4' we will
+    // convert the resulting WebM file to MP4 in `_convertToMp4` after the
+    // stream is finalized. This avoids ffmpeg trying to convert a file
+    // in-place when input and output paths are identical.
+    const incomingExt = this._extForMime(info.mimeType) || 'webm';
     const baseName = this._buildBaseName({
       timestamp: new Date().toISOString(),
       alertType: info.alertType,
       alertId: info.sessionId,
     });
-    const videoPath = path.join(this.outputDir, `${baseName}.${ext}`);
+    const videoPath = path.join(this.outputDir, `${baseName}.${incomingExt}`);
 
     try {
       const ws = fs.createWriteStream(videoPath);

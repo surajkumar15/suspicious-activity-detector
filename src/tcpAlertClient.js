@@ -75,16 +75,47 @@ class TcpAlertClient {
    * Called whenever an alert is triggered.
    */
   sendAlert() {
-    if (!this.enabled) return;
+    logger.debug(`[TcpAlert] sendAlert called - enabled: ${this.enabled}`);
+    if (!this.enabled) {
+      logger.warn('[TcpAlert] TCP alert client disabled (TCP_ALERT_ENABLED not set to true)');
+      return;
+    }
     if (!this.connected || !this.socket) {
-      logger.debug('TCP alert client not connected; alert not forwarded');
+      logger.warn(`[TcpAlert] TCP alert client not connected (connected: ${this.connected}, socket: ${!!this.socket}); alert not forwarded`);
       return;
     }
 
     try {
       this.socket.write('send-alert\n');
+      logger.info('[TcpAlert] Successfully sent send-alert command');
     } catch (err) {
-      logger.error('TCP alert client failed to send', { error: err.message });
+      logger.error('[TcpAlert] Failed to send', { error: err.message });
+    }
+  }
+
+  /**
+   * Send a 'send-file' command with the provided file path to the listener.
+   * The listener is expected to handle the path and transfer or ingest the
+   * file as appropriate.
+   * @param {string} filePath
+   */
+  sendFile(filePath) {
+    logger.debug(`[TcpAlert] sendFile called - enabled: ${this.enabled}, file: ${filePath}`);
+    if (!this.enabled) {
+      logger.warn('[TcpAlert] TCP alert client disabled (TCP_ALERT_ENABLED not set to true)');
+      return;
+    }
+    if (!this.connected || !this.socket) {
+      logger.warn(`[TcpAlert] TCP alert client not connected (connected: ${this.connected}, socket: ${!!this.socket}); send-file not forwarded`);
+      return;
+    }
+
+    try {
+      // Send command with file path on the same line so the listener can parse it.
+      this.socket.write(`send-file ${filePath}\n`);
+      logger.info('[TcpAlert] Successfully sent send-file command');
+    } catch (err) {
+      logger.error('[TcpAlert] Failed to send send-file', { error: err.message });
     }
   }
 
