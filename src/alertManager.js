@@ -84,15 +84,17 @@ class AlertManager {
         logger.warn('Failed to forward TCP alert immediately', { error: err.message });
       }
 
-      // 2. Write the alert type to the message text file, then send 'send-text'.
-      this._writeAlertText(alertPayload)
-        .then(() => this.tcpClient.sendText())
-        .catch((err) => logger.error('Failed to write alert text / send-text', { error: err.message }));
-
-      // 3. Write the location to the location text file, then send 'send-location'.
-      this._writeAlertLocation(alertPayload)
-        .then(() => this.tcpClient.sendLocation())
-        .catch((err) => logger.error('Failed to write alert location / send-location', { error: err.message }));
+      // 2. Write message text, send send-text, wait 1 second, then
+      //    write location and send send-location.
+      (async () => {
+        await this._writeAlertText(alertPayload);
+        this.tcpClient.sendText();
+        await this._delay(1000);
+        await this._writeAlertLocation(alertPayload);
+        this.tcpClient.sendLocation();
+      })().catch((err) => {
+        logger.error('Failed in send-text/send-location sequence', { error: err.message });
+      });
 
       // 4. The 'send-file' command is sent later, when the video file is
       //    finalized by the feed writer (see sendFileViaSocket / videoEnd).
@@ -198,6 +200,10 @@ class AlertManager {
       || `Suspicious activity detected: ${alertPayload.alertType}`;
     const line = `${message}\n`;
     await fs.promises.writeFile(this.messageLogPath, line, 'utf8');
+  }
+
+  _delay(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
   sendAlertViaSocket(alertId) {
