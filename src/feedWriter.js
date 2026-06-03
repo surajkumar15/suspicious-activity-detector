@@ -158,8 +158,9 @@ class FeedWriter {
     await new Promise((resolve) => session.ws.end(resolve));
 
     try {
-      // If MP4 format is requested, convert the WebM file to MP4
-      if (this.videoFormat === 'mp4' && session.mimeType.includes('webm')) {
+      // If MP4 format is requested, always transcode to H.264/AAC MP4 so the
+      // final file matches the codec/container combination from the screenshot.
+      if (this.videoFormat === 'mp4') {
         await this._convertToMp4(session);
       }
 
@@ -181,17 +182,28 @@ class FeedWriter {
 
   async _convertToMp4(session) {
     const { execFile } = require('child_process');
-    const webmPath = session.videoPath;
-    const mp4Path = webmPath.replace(/\.webm$/, '.mp4');
+    const inputPath = session.videoPath;
+    const finalMp4Path = inputPath.replace(/\.[^.]+$/, '.mp4');
+    const tempMp4Path = finalMp4Path === inputPath ? `${finalMp4Path}.tmp.mp4` : finalMp4Path;
 
     return new Promise((resolve) => {
       execFile(this.ffmpegPath, [
-        '-i', webmPath,
+        '-i', inputPath,
+        '-map', '0:v:0',
+        '-map', '0:a:0?',
         '-c:v', 'libx264',
-        '-preset', 'ultrafast',
+        '-profile:v', 'high',
+        '-level', '4.0',
+        '-pix_fmt', 'yuv420p',
+        '-tag:v', 'avc1',
         '-c:a', 'aac',
+        '-b:a', '128k',
+        '-ar', '48000',
+        '-ac', '2',
+        '-movflags', '+faststart',
+        '-preset', 'veryfast',
         '-y',
-        mp4Path,
+        tempMp4Path,
       ], (error) => {
         if (error) {
           if (error.code === 'ENOENT') {
@@ -202,22 +214,27 @@ class FeedWriter {
             });
           } else {
             logger.warn('Feed writer: ffmpeg conversion failed', {
-              webm: path.basename(webmPath),
+              input: path.basename(inputPath),
               error: error.message,
             });
           }
           resolve();
         } else {
           try {
-            fs.unlinkSync(webmPath);
-            logger.info('Feed writer: converted WebM to MP4', {
-              webm: path.basename(webmPath),
-              mp4: path.basename(mp4Path),
+            if (tempMp4Path !== finalMp4Path) {
+              fs.renameSync(tempMp4Path, finalMp4Path);
+            }
+            if (inputPath !== finalMp4Path && fs.existsSync(inputPath)) {
+              fs.unlinkSync(inputPath);
+            }
+            logger.info('Feed writer: converted video to H.264/AAC MP4', {
+              input: path.basename(inputPath),
+              mp4: path.basename(finalMp4Path),
             });
-            session.videoPath = mp4Path;
+            session.videoPath = finalMp4Path;
           } catch (err) {
-            logger.warn('Feed writer: failed to remove original WebM', {
-              file: webmPath,
+            logger.warn('Feed writer: failed to finalize MP4 output', {
+              file: inputPath,
               error: err.message,
             });
           }

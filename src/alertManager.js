@@ -14,6 +14,13 @@ const SEVERITY_MAP = {
   INTRUSION: 'MEDIUM',
 };
 
+const ALERT_MESSAGE_MAP = {
+  GUNFIRE: 'Gunfire detected. Immediate response required.',
+  FIRE: 'Fire detected. Immediate attention required.',
+  FIGHTING_CROWD: 'Violence or crowd disturbance detected. Security intervention recommended.',
+  INTRUSION: 'Unauthorized intrusion detected in a restricted area.',
+};
+
 class AlertManager {
   constructor(io) {
     this.io = io;
@@ -187,7 +194,9 @@ class AlertManager {
   }
 
   async _writeAlertText(alertPayload) {
-    const line = `${alertPayload.alertType} | severity=${alertPayload.severity}\n`;
+    const message = ALERT_MESSAGE_MAP[alertPayload.alertType]
+      || `Suspicious activity detected: ${alertPayload.alertType}`;
+    const line = `${message}\n`;
     await fs.promises.writeFile(this.messageLogPath, line, 'utf8');
   }
 
